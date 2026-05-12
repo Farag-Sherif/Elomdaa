@@ -20,7 +20,7 @@ const OffersGridNoSidebar = lazy(() =>
 
 // blog pages
 const BlogStandard = lazy(() => import("./pages/blog/BlogNoSidebar"));
-const BlogDetailsStandard = lazy(() =>import("./pages/blog/BlogDetailsStandard"));
+const BlogDetailsStandard = lazy(() => import("./pages/blog/BlogDetailsStandard"));
 
 
 // product pages
@@ -53,7 +53,7 @@ const App = (props) => {
   }, []);
 
   return (
-    <ToastProvider placement="bottom-left" transitionDuration={180}>
+    <ToastProvider   placement="bottom-left"  transitionDuration={180} autoDismiss={true} autoDismissTimeout={4000}  >
       <BreadcrumbsProvider>
         <Router>
           <ScrollToTop>
@@ -101,7 +101,7 @@ const App = (props) => {
           </ScrollToTop>
         </Router>
       </BreadcrumbsProvider>
-    </ToastProvider>
+    </ToastProvider >
   );
 };
 

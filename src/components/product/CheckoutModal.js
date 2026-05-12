@@ -32,6 +32,10 @@ function CheckoutModal({
   const [deliveryFees, setDeliveryFees] = useState(0);
   const [freeDeliveryAt, setFreeDeliveryAt] = useState(null);
 
+  const [user, setUser] = useState(null);
+  const [addresses, setAddresses] = useState([]);
+  const [selectedAddress, setSelectedAddress] = useState(null);
+
   // Fetch cities on component load
   useEffect(() => {
     axiosInstance
@@ -55,6 +59,41 @@ function CheckoutModal({
       })
       .catch((err) => console.error("Failed to fetch settings:", err));
   }, []);
+
+  // Fetch user addresses if logged in
+  useEffect(() => {
+    const fetchData = async () => {
+      if (localStorage.getItem("authToken")) {
+        try {
+          const response = await axiosInstance.get("/user");
+          setUser(response.data.user);
+          const userAddresses = response.data.user.addresses || [];
+          setAddresses(userAddresses);
+          if (userAddresses.length > 0) {
+            setSelectedAddress(userAddresses[0].id);
+          }
+        } catch (error) {
+          console.error("Failed to fetch user data:", error);
+        }
+      }
+    };
+    fetchData();
+  }, []);
+
+  // Update delivery fees when selected address changes
+  useEffect(() => {
+    if (selectedAddress && cities.length > 0 && addresses.length > 0) {
+      const selectedAddr = addresses.find((a) => a.id === selectedAddress);
+      if (selectedAddr) {
+        const selectedCity = cities.find(
+          (c) => c.id === parseInt(selectedAddr.city)
+        );
+        if (selectedCity) {
+          setDeliveryFees(selectedCity.delivery_tax);
+        }
+      }
+    }
+  }, [selectedAddress, cities, addresses]);
 
   // ✅ حساب إجمالي السلة
   const cartTotalPrice =
@@ -91,6 +130,17 @@ function CheckoutModal({
     setDeliveryFees(selectedCity ? selectedCity.delivery_tax : 0);
   };
 
+  const handleAddressSelect = (value) => {
+    if (value === "new") {
+      setSelectedAddress(null);
+      const selectedCity = cities.find((city) => city.id === parseInt(formData.city));
+      setDeliveryFees(selectedCity ? selectedCity.delivery_tax : 0);
+      return;
+    }
+    const numericValue = parseInt(value, 10);
+    setSelectedAddress(numericValue);
+  };
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData((prevData) => ({
@@ -102,7 +152,69 @@ function CheckoutModal({
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    const checkoutData = {
+    const cartData = products.map((product) => {
+      const itemQty =
+        product?.cartQuantity ||
+        product?.quantity ||
+        product?.pivot?.qty ||
+        product?.qty ||
+        quantityCount ||
+        1;
+      return {
+        item_id: product.id,
+        qty: itemQty,
+        size:
+          product.size ||
+          product.weight ||
+          product.selectedProductSize ||
+          product?.selectedVariation?.weight,
+      };
+    });
+
+    let finalAddressId = selectedAddress;
+
+    // If user is logged in and wants a new address, we MUST create it first to get an address_id
+    if (user && !selectedAddress) {
+      if (!formData.fName || !formData.phone || !formData.city || !formData.street) {
+        addToast(strings["fill_required_fields"] || "الرجاء ملء جميع الحقول المطلوبة", { appearance: "error" });
+        return;
+      }
+      
+      try {
+        const addressResponse = await axiosInstance.post("/user/addresses/add", {
+          f_name: formData.fName,
+          l_name: formData.lName,
+          email: formData.email,
+          phone: formData.phone,
+          country: formData.country,
+          city: formData.city, // Backend might expect address_id/city here based on Checkout.js
+          zip: formData.zip,
+          street: formData.street,
+          notes: formData.notes,
+          type: "cod",
+        });
+
+        if (addressResponse.data.status === "success") {
+          finalAddressId = addressResponse.data.address.id;
+          setAddresses((prev) => [...prev, addressResponse.data.address]);
+          setSelectedAddress(finalAddressId);
+        } else {
+          addToast(strings["address_add_failed"] || "فشل في إضافة العنوان", { appearance: "error" });
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to add new address:", error);
+        addToast(strings["address_add_failed"] || "فشل في إضافة العنوان", { appearance: "error" });
+        return;
+      }
+    }
+
+    const checkoutData = finalAddressId ? {
+      address_id: finalAddressId,
+      type: "cod",
+      notes: formData.notes,
+      cart: cartData,
+    } : {
       f_name: formData.fName,
       l_name: formData.lName,
       email: formData.email,
@@ -113,24 +225,7 @@ function CheckoutModal({
       street: formData.street,
       notes: formData.notes,
       type: "cod",
-      cart: products.map((product) => {
-        const itemQty =
-          product?.cartQuantity ||
-          product?.quantity ||
-          product?.pivot?.qty ||
-          product?.qty ||
-          quantityCount ||
-          1;
-        return {
-          item_id: product.id,
-          qty: itemQty,
-          size:
-            product.size ||
-            product.weight ||
-            product.selectedProductSize ||
-            product?.selectedVariation?.weight,
-        };
-      }),
+      cart: cartData,
     };
 
     try {
@@ -203,99 +298,152 @@ function CheckoutModal({
           <form>
             <Modal.Body className="p-0">
               <div className="checkout-modal-content p-3">
-                {/* Contact Information */}
-                <div className="mb-4">
-                  <p className="fw-bold mb-3">{strings["contact_info"]}</p>
-                  <div className="mb-3">
-                    <input
-                      type="text"
-                      name="fName"
-                      value={formData.fName}
-                      onChange={handleInputChange}
-                      placeholder={strings["first_name"]}
-                    />
+                {user && addresses.length > 0 && (
+                  <div className="mb-4">
+                    <p className="fw-bold mb-3">{strings["chose_address"] || "اختر عنوان"}</p>
+                    {addresses.map((address) => (
+                      <div className="address-item mb-2 d-flex align-items-center" key={address.id}>
+                        <input
+                          type="radio"
+                          name="address_id"
+                          id={`modal-address-${address.id}`}
+                          className="address-radio"
+                          value={address.id}
+                          onChange={(e) => handleAddressSelect(e.target.value)}
+                          checked={selectedAddress === address.id}
+                        />
+                        <label
+                          htmlFor={`modal-address-${address.id}`}
+                          className="address-label mb-0"
+                          style={{ marginInlineStart: '8px' }}
+                        >
+                          {address.f_name} {address.l_name} - {address.street}, {address.city}, {address.country}
+                        </label>
+                      </div>
+                    ))}
+                    <div className="address-item mb-2 d-flex align-items-center mt-3">
+                      <input
+                        type="radio"
+                        name="address_id"
+                        id="modal-address-new"
+                        className="address-radio"
+                        value="new"
+                        onChange={(e) => handleAddressSelect(e.target.value)}
+                        checked={selectedAddress === null}
+                      />
+                      <label
+                        htmlFor="modal-address-new"
+                        className="address-label mb-0 fw-bold"
+                        style={{ marginInlineStart: '8px' }}
+                      >
+                        {strings["add_new_address"] || "إضافة عنوان جديد"}
+                      </label>
+                    </div>
                   </div>
-                  <div className="mb-3">
-                    <input
-                      type="text"
-                      name="lName"
-                      value={formData.lName}
-                      onChange={handleInputChange}
-                      placeholder={strings["last_name"]}
-                    />
-                  </div>
-                  <div className="mb-3">
-                    <input
-                      type="email"
-                      name="email"
-                      value={formData.email}
-                      onChange={handleInputChange}
-                      placeholder={strings["email_optional"]}
-                    />
-                  </div>
-                  <div className="mb-3">
-                    <input
-                      type="text"
-                      name="phone"
-                      value={formData.phone}
-                      onChange={handleInputChange}
-                      placeholder={strings["phone"]}
-                    />
-                  </div>
-                </div>
+                )}
 
-                {/* Shipping Information */}
+                {(!user || addresses.length === 0 || selectedAddress === null) && (
+                  <>
+                    {/* Contact Information */}
+                    <div className="mb-4">
+                      <p className="fw-bold mb-3">{strings["contact_info"]}</p>
+                      <div className="mb-3">
+                        <input
+                          type="text"
+                          name="fName"
+                          value={formData.fName}
+                          onChange={handleInputChange}
+                          placeholder={strings["first_name"]}
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <input
+                          type="text"
+                          name="lName"
+                          value={formData.lName}
+                          onChange={handleInputChange}
+                          placeholder={strings["last_name"]}
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <input
+                          type="email"
+                          name="email"
+                          value={formData.email}
+                          onChange={handleInputChange}
+                          placeholder={strings["email_optional"]}
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <input
+                          type="text"
+                          name="phone"
+                          value={formData.phone}
+                          onChange={handleInputChange}
+                          placeholder={strings["phone"]}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Shipping Information */}
+                    <div className="mb-4">
+                      <p className="fw-bold mb-3">{strings["shipping_info"]}</p>
+                      <div className="mb-3">
+                        <input
+                          type="text"
+                          name="street"
+                          value={formData.street}
+                          onChange={handleInputChange}
+                          placeholder={strings["street"]}
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <input
+                          type="text"
+                          name="country"
+                          value={formData.country}
+                          onChange={handleInputChange}
+                          placeholder={strings["country"]}
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <select
+                          name="city"
+                          value={formData.city}
+                          onChange={handleCityChange}
+                        >
+                          <option value="">{strings["select_city"]}</option>
+                          {cities.map((city) => (
+                            <option key={city.id} value={city.id}>
+                              {currentLanguageCode === "ar"
+                                ? city.translations[0]?.name
+                                : city.translations[1]?.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="mb-3">
+                        <input
+                          type="text"
+                          name="zip"
+                          value={formData.zip}
+                          onChange={handleInputChange}
+                          placeholder={strings["zip_code"]}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 <div className="mb-4">
-                  <p className="fw-bold mb-3">{strings["shipping_info"]}</p>
-                  <div className="mb-3">
-                    <input
-                      type="text"
-                      name="street"
-                      value={formData.street}
-                      onChange={handleInputChange}
-                      placeholder={strings["street"]}
-                    />
-                  </div>
-                  <div className="mb-3">
-                    <input
-                      type="text"
-                      name="country"
-                      value={formData.country}
-                      onChange={handleInputChange}
-                      placeholder={strings["country"]}
-                    />
-                  </div>
-                  <div className="mb-3">
-                    <select
-                      name="city"
-                      value={formData.city}
-                      onChange={handleCityChange}
-                    >
-                      <option value="">{strings["select_city"]}</option>
-                      {cities.map((city) => (
-                        <option key={city.id} value={city.id}>
-                          {currentLanguageCode === "ar"
-                            ? city.translations[0].name
-                            : city.translations[1].name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="mb-3">
-                    <input
-                      type="text"
-                      name="zip"
-                      value={formData.zip}
-                      onChange={handleInputChange}
-                      placeholder={strings["zip_code"]}
-                    />
-                  </div>
+                  <p className="fw-bold mb-3">{strings["order_notes"] || "ملاحظات الطلب"}</p>
                   <div className="mb-3">
                     <textarea
                       name="notes"
                       value={formData.notes}
                       onChange={handleInputChange}
                       placeholder={strings["notes"]}
+                      style={{ width: "100%", padding: "10px", borderRadius: "5px", border: "1px solid #ccc", outline: "none" }}
                     />
                   </div>
                 </div>
