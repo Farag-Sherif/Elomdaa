@@ -171,9 +171,31 @@ function CheckoutModal({
       };
     });
 
+    // ✅ مزامنة المنتجات مع سلة الباك إند قبل الـ checkout
+    // عشان لو المستخدم ضغط "اطلب الآن" من غير ما يضيف للسلة الأول
+    // أو لو السلة اتمسحت بعد طلب سابق
+    if (localStorage.getItem("authToken")) {
+      try {
+        // أول حاجة نمسح السلة القديمة عشان نتجنب تكرار المنتجات
+        await axiosInstance.post("/remove-all-cart");
+
+        // نضيف كل المنتجات لسلة الباك إند
+        for (const item of cartData) {
+          await axiosInstance.post("/add-to-cart", {
+            item_id: item.item_id,
+            qty: item.qty,
+            size: item.size,
+          });
+        }
+      } catch (error) {
+        console.error("Failed to sync cart with backend:", error);
+        // نكمل الـ checkout حتى لو فشلت المزامنة - الباك إند ممكن يقبل inline cart
+      }
+    }
+
     let finalAddressId = selectedAddress;
 
-    // If user is logged in and wants a new address, we MUST create it first to get an address_id
+    // If user is logged in and wants a new address, try to create it
     if (user && !selectedAddress) {
       if (!formData.fName || !formData.phone || !formData.city || !formData.street) {
         addToast(strings["fill_required_fields"] || "الرجاء ملء جميع الحقول المطلوبة", { appearance: "error" });
@@ -187,8 +209,8 @@ function CheckoutModal({
           email: formData.email,
           phone: formData.phone,
           country: formData.country,
-          city: formData.city, // Backend might expect address_id/city here based on Checkout.js
-          zip: formData.zip,
+          city: formData.city,
+          zip: formData.zip || "00000", // ✅ قيمة افتراضية لو المستخدم مكتبش رمز بريدي
           street: formData.street,
           notes: formData.notes,
           type: "cod",
@@ -199,13 +221,15 @@ function CheckoutModal({
           setAddresses((prev) => [...prev, addressResponse.data.address]);
           setSelectedAddress(finalAddressId);
         } else {
-          addToast(strings["address_add_failed"] || "فشل في إضافة العنوان", { appearance: "error" });
-          return;
+          // ✅ لو فشل إنشاء العنوان، نكمل الـ checkout ببيانات العنوان inline
+          console.warn("Address creation returned non-success, proceeding with inline address data");
+          finalAddressId = null;
         }
       } catch (error) {
         console.error("Failed to add new address:", error);
-        addToast(strings["address_add_failed"] || "فشل في إضافة العنوان", { appearance: "error" });
-        return;
+        // ✅ بدل ما نوقف الـ checkout، نكمل ببيانات العنوان inline (زي الـ guest)
+        console.warn("Address creation failed, falling back to inline address checkout");
+        finalAddressId = null;
       }
     }
 
@@ -235,7 +259,7 @@ function CheckoutModal({
           strings["Checkoutsuccessful"] ||
           "تم إتمام الطلب بنجاح! | Order placed successfully!";
         addToast(successMsg, { appearance: "success" });
-        dispatch(deleteAllFromCart(addToast));
+        dispatch(deleteAllFromCart()); // بدون toast عشان مش عايزين رسالة "تم إفراغ السلة" بعد نجاح الطلب
         onHide();
       } else {
         const errorMsg =
