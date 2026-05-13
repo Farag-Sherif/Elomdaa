@@ -53,7 +53,26 @@ const App = (props) => {
   }, []);
 
   return (
-    <ToastProvider   placement="bottom-left"  transitionDuration={180} autoDismiss={true} autoDismissTimeout={4000}  >
+    <ToastProvider 
+      placement="top-center" 
+      transitionDuration={180} 
+      autoDismiss={true} 
+      autoDismissTimeout={4000}
+      components={{
+        ToastContainer: (props) => (
+          <div
+            {...props}
+            style={{
+              ...props.style,
+              zIndex: 9999999999999999,
+              position: 'fixed',
+              bottom: '10px',
+              left: '10px',
+            }}
+          />
+        )
+      }}
+    >
       <BreadcrumbsProvider>
         <Router>
           <ScrollToTop>
